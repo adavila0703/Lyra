@@ -19,10 +19,10 @@
     "smoke:ui": "electron-vite build && node scripts/run-ui-smoke.cjs",
     "screenshot": "electron-vite build && node scripts/capture-screenshot.cjs",
     "release": "node scripts/release.cjs",
-    "build:unpack": "pnpm build && electron-builder --dir",
-    "build:win": "pnpm build && electron-builder --win",
-    "build:mac": "pnpm build && electron-builder --mac",
-    "build:linux": "pnpm build && electron-builder --linux"
+    "build:unpack": "pnpm build && electron-builder --dir --publish never",
+    "build:win": "pnpm build && electron-builder --win --publish never",
+    "build:mac": "pnpm build && electron-builder --mac --publish never",
+    "build:linux": "pnpm build && electron-builder --linux --publish never"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
