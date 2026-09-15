@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron'
-import type { Page, VoicePagesApi, WhisperStatus } from '../shared/types'
+import type { Page, UpdateStatus, VoicePagesApi, WhisperStatus } from '../shared/types'
 
 const api: VoicePagesApi = {
   listPages: () => ipcRenderer.invoke('pages:list'),
@@ -17,6 +17,20 @@ const api: VoicePagesApi = {
     ipcRenderer.on('whisper:status', listener)
     return () => {
       ipcRenderer.removeListener('whisper:status', listener)
+    }
+  },
+  startUpdate: () => ipcRenderer.invoke('updater:start'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatus): void => {
+      callback(status)
+    }
+    ipcRenderer.on('updater:status', listener)
+    void ipcRenderer.invoke('updater:get').then((status: UpdateStatus) => {
+      callback(status)
+    })
+    return () => {
+      ipcRenderer.removeListener('updater:status', listener)
     }
   }
 }

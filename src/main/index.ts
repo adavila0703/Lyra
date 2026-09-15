@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createPage, deletePage, getPage, listPages, savePage } from './pages'
+import { registerUpdater } from './updater'
 import { broadcastStatus, ensureModel, pcmFromIpc, transcribePcm } from './whisper'
 import type { Page } from '../shared/types'
 
@@ -181,6 +182,7 @@ app.whenReady().then(() => {
   })
 
   registerIpc()
+  registerUpdater()
   createWindow()
   broadcastStatus({ state: 'idle' })
 

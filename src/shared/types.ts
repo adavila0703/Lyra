@@ -19,6 +19,13 @@ export type WhisperStatus =
   | { state: 'downloading'; received: number; total: number }
   | { state: 'error'; message: string }
 
+export type UpdateStatus =
+  | { state: 'idle' }
+  | { state: 'available'; version: string }
+  | { state: 'downloading'; percent: number }
+  | { state: 'ready'; version: string }
+  | { state: 'error'; message: string }
+
 export type VoicePagesApi = {
   listPages: () => Promise<PageSummary[]>
   getPage: (id: string) => Promise<Page>
@@ -29,4 +36,7 @@ export type VoicePagesApi = {
   ensureModel: () => Promise<void>
   transcribe: (pcm: Uint8Array) => Promise<string>
   onStatus: (callback: (status: WhisperStatus) => void) => () => void
+  startUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
 }
