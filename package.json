@@ -1,6 +1,6 @@
 {
   "name": "lyra",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lyra — a local voice notebook: talk onto pages, autosave markdown, all on device.",
   "main": "./out/main/index.js",
   "author": "Lyra contributors",
