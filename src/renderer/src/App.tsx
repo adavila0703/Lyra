@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { startCapture, type CaptureHandle } from './audio/capture'
 import lyraIcon from './assets/lyra-icon.png'
-import type { Page, PageSummary, WhisperStatus } from '../../shared/types'
+import type { Page, PageSummary, UpdateStatus, WhisperStatus } from '../../shared/types'
 
 function formatUpdated(value: string): string {
   const date = new Date(value)
@@ -41,6 +41,16 @@ function statusLabel(
   return 'Idle · everything stays on this computer'
 }
 
+function updateChipLabel(status: UpdateStatus): string | null {
+  if (status.state === 'available') return 'Update'
+  if (status.state === 'downloading') {
+    return status.percent > 0 ? `Updating… ${status.percent}%` : 'Updating…'
+  }
+  if (status.state === 'ready') return 'Restart'
+  if (status.state === 'error') return 'Update failed'
+  return null
+}
+
 function appendTranscript(body: string, chunk: string): string {
   const text = chunk.trim()
   if (!text) return body
@@ -64,6 +74,7 @@ export default function App(): React.JSX.Element {
   const [micName, setMicName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [update, setUpdate] = useState<UpdateStatus>({ state: 'idle' })
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
   const currentRef = useRef<Page | null>(null)
@@ -96,7 +107,12 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     void refreshList()
-    return window.api.onStatus(setStatus)
+    const stopStatus = window.api.onStatus(setStatus)
+    const stopUpdate = window.api.onUpdateStatus(setUpdate)
+    return () => {
+      stopStatus()
+      stopUpdate()
+    }
   }, [refreshList])
 
   const persist = useCallback((page: Page, immediate = false) => {
@@ -327,6 +343,17 @@ export default function App(): React.JSX.Element {
     return Math.min(100, Math.round((status.received / status.total) * 100))
   }, [status])
 
+  const updateLabel = updateChipLabel(update)
+
+  const onUpdateChip = (): void => {
+    if (update.state === 'downloading') return
+    if (update.state === 'ready') {
+      void window.api.installUpdate()
+      return
+    }
+    void window.api.startUpdate()
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -394,6 +421,19 @@ export default function App(): React.JSX.Element {
             ))
           )}
         </div>
+        {updateLabel ? (
+          <div className="sidebar-update">
+            <button
+              className="update-chip"
+              type="button"
+              disabled={update.state === 'downloading'}
+              title={update.state === 'available' ? `Version ${update.version} is available` : undefined}
+              onClick={onUpdateChip}
+            >
+              {updateLabel}
+            </button>
+          </div>
+        ) : null}
       </aside>
 
       <main className="workspace">

@@ -49,4 +49,8 @@ linux:
   synopsis: Local voice notebook
 appImage:
   artifactName: ${name}-${version}.${ext}
+publish:
+  provider: github
+  owner: adavila0703
+  repo: Lyra
 npmRebuild: true

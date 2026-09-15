@@ -60,7 +60,9 @@ jobs:
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.zip
-            artifacts/**/*.exe
+            artifacts/**/*-setup.exe
             artifacts/**/*.AppImage
             artifacts/**/*.deb
+            artifacts/**/latest*.yml
+            artifacts/**/*.blockmap
           generate_release_notes: true
