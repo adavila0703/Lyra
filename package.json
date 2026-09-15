@@ -1,0 +1,52 @@
+{
+  "name": "lyra",
+  "version": "0.1.0",
+  "description": "Lyra — a local voice notebook: talk onto pages, autosave markdown, all on device.",
+  "main": "./out/main/index.js",
+  "author": "Lyra contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/adavila0703/Lyra",
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "pnpm typecheck && electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
+    "postinstall": "electron-builder install-app-deps && node scripts/fix-whisper-rpath.cjs",
+    "smoke": "electron scripts/smoke-native.cjs",
+    "smoke:ui": "electron-vite build && node scripts/run-ui-smoke.cjs",
+    "screenshot": "electron-vite build && node scripts/capture-screenshot.cjs",
+    "release": "node scripts/release.cjs",
+    "build:unpack": "pnpm build && electron-builder --dir",
+    "build:win": "pnpm build && electron-builder --win",
+    "build:mac": "pnpm build && electron-builder --mac",
+    "build:linux": "pnpm build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@electron-toolkit/utils": "^4.0.0",
+    "@kutalia/whisper-node-addon": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@types/node": "^22.19.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "37.1.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "@kutalia/whisper-node-addon"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+out
+dist
+release
+package-lock.json
+yarn.lock
+.DS_Store
+*.log
+.eslintcache
+.env
+.env.*
+models
+*.gguf
+*.bin
+!build/**

@@ -1,0 +1,297 @@
+:root {
+  color-scheme: light;
+  --paper: #f4efe6;
+  --paper-dark: #ebe3d4;
+  --ink: #1f1a16;
+  --ink-soft: #5c534a;
+  --rule: #d8cfc0;
+  --accent: #b42318;
+  --accent-soft: #f3d4cf;
+  --sidebar: #e7dfd2;
+  --shadow: 0 10px 30px rgba(47, 36, 22, 0.08);
+  font-family:
+    'Avenir Next',
+    'Segoe UI',
+    'Helvetica Neue',
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  background: var(--sidebar);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand {
+  padding: 22px 20px 12px;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-icon {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+}
+
+.brand p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sidebar-actions {
+  padding: 0 16px 12px;
+}
+
+.page-list {
+  overflow: auto;
+  padding: 0 8px 16px;
+  flex: 1;
+}
+
+.page-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-radius: 10px;
+}
+
+.page-row:hover,
+.page-row.active {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.page-item {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
+  padding: 10px 8px 10px 12px;
+  cursor: pointer;
+}
+
+.page-item:hover,
+.page-item.active {
+  background: transparent;
+}
+
+.page-delete {
+  flex: 0 0 auto;
+  width: 32px;
+  margin: 6px 6px 6px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0.55;
+}
+
+.page-row:hover .page-delete,
+.page-row.active .page-delete {
+  opacity: 1;
+}
+
+.page-delete:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.page-item .title {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-item .meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.title-input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+  outline: none;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  border: 1px solid var(--rule);
+  background: white;
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+.btn.primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.btn.record {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.btn.ghost {
+  box-shadow: none;
+  background: transparent;
+}
+
+.editor-wrap {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 20px 0;
+}
+
+.editor {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  resize: none;
+  outline: none;
+  background: transparent;
+  font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink-soft);
+  text-align: center;
+  padding: 40px;
+}
+
+.empty h2 {
+  margin: 0;
+  color: var(--ink);
+  font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+}
+
+.statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px 14px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.status-listening {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.progress {
+  height: 4px;
+  background: var(--paper-dark);
+}
+
+.mic-meter {
+  width: 72px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--paper-dark);
+  overflow: hidden;
+  align-self: center;
+}
+
+.mic-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
