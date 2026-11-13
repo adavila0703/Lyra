@@ -1,11 +1,12 @@
-import { app, BrowserWindow, ipcMain, nativeImage, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session, shell } from 'electron'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createPage, deletePage, getPage, listPages, savePage } from './pages'
 import { registerUpdater } from './updater'
-import { broadcastStatus, ensureModel, pcmFromIpc, transcribePcm } from './whisper'
+import { broadcastStatus, pcmFromIpc, transcribePcm, warmUp } from './whisper'
+import { log, logPath } from './log'
 import type { Page } from '../shared/types'
 
 if (process.env.VOICE_PAGES_SMOKE === '1' || process.env.VOICE_PAGES_SCREENSHOT === '1') {
@@ -26,7 +27,10 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'Lyra',
-    backgroundColor: '#f4efe6',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#18181b' : '#fafafa',
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 18 } }
+      : {}),
     ...(icon.isEmpty() ? {} : { icon }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -75,10 +79,13 @@ function registerIpc(): void {
     savePage(page)
   )
   ipcMain.handle('pages:delete', (_event, id: string) => deletePage(id))
-  ipcMain.handle('whisper:ensureModel', () => ensureModel())
-  ipcMain.handle('whisper:transcribe', async (_event, payload: unknown) => {
-    return transcribePcm(pcmFromIpc(payload))
+  ipcMain.on('log:write', (_event, scope: unknown, message: unknown, data: unknown) => {
+    log(String(scope), String(message), data)
   })
+  ipcMain.handle('whisper:warmUp', () => warmUp())
+  ipcMain.handle('whisper:transcribe', (_event, payload: unknown, prompt: unknown) =>
+    transcribePcm(pcmFromIpc(payload), typeof prompt === 'string' ? prompt : '')
+  )
 }
 
 async function seedScreenshotPages(): Promise<void> {
@@ -164,6 +171,7 @@ async function runUiSmoke(win: BrowserWindow): Promise<void> {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.voicepages.app')
+  log('app', `started ${app.getVersion()}`, { log: logPath() })
 
   const icon = appIcon()
   if (process.platform === 'darwin' && !icon.isEmpty()) {

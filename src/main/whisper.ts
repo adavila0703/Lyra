@@ -1,13 +1,13 @@
 import { app, BrowserWindow } from 'electron'
 import { createRequire } from 'node:module'
 import { createWriteStream } from 'node:fs'
-import { mkdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { arch, platform, tmpdir } from 'node:os'
+import { mkdir, rename, stat, unlink } from 'node:fs/promises'
+import { arch, platform } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { randomUUID } from 'node:crypto'
 import { finished } from 'node:stream/promises'
-import type { WhisperStatus } from '../shared/types'
+import type { TranscriptWord, WhisperStatus } from '../shared/types'
+import { log } from './log'
 
 const MODEL_NAME = 'ggml-base.en.bin'
 const MODEL_URL =
@@ -128,107 +128,143 @@ export function pcmFromIpc(payload: unknown): Float32Array {
   return copy
 }
 
-function extractText(result: { transcription?: unknown } | string[] | string[][]): string {
-  const value =
-    result && typeof result === 'object' && 'transcription' in result
-      ? result.transcription
-      : result
-  if (value == null) return ''
-  if (typeof value === 'string') return cleanTranscript(value)
-  if (!Array.isArray(value)) return cleanTranscript(String(value))
-  return cleanTranscript(
-    value
-      .map((row) => (Array.isArray(row) ? String(row[row.length - 1] ?? '') : String(row)))
-      .join(' ')
-  )
+const HALLUCINATIONS = new Set(['you', 'thank you', 'thanks for watching', 'bye', '.', '...'])
+
+function seconds(stamp: unknown): number {
+  const match = /^(\d+):(\d+):(\d+)[,.](\d+)$/.exec(String(stamp))
+  if (!match) return 0
+  const [, h, m, s, ms] = match.map(Number)
+  return h * 3600 + m * 60 + s + ms / 1000
 }
 
-function cleanTranscript(text: string): string {
-  const cleaned = text
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!cleaned) return ''
-  const lower = cleaned.toLowerCase().replace(/[.?!,]+$/g, '')
-  const junk = new Set(['you', 'thank you', 'thanks for watching', 'bye', 'okay', 'ok', '...', '.'])
-  return junk.has(lower) ? '' : cleaned
-}
+/**
+ * With `max_len: 1` Whisper returns one row per token: [start, end, text].
+ * Tokens that start with a space begin a new word; the rest (punctuation,
+ * word pieces) attach to the previous word. Bracketed annotations such as
+ * [BLANK_AUDIO] or (music) are dropped.
+ */
+function wordsFromTokens(result: { transcription?: unknown }): TranscriptWord[] {
+  const rows = Array.isArray(result?.transcription) ? result.transcription : []
+  const words: TranscriptWord[] = []
+  let bracketDepth = 0
 
-function encodeWav16k(pcm: Float32Array): Buffer {
-  const data = Buffer.alloc(pcm.length * 2)
-  for (let i = 0; i < pcm.length; i++) {
-    const sample = Math.max(-1, Math.min(1, pcm[i] ?? 0))
-    data.writeInt16LE(Math.round(sample * 32767), i * 2)
-  }
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length < 3) continue
+    const text = String(row[2] ?? '')
+    const start = seconds(row[0])
+    const end = seconds(row[1])
+    const opens = (text.match(/[[(]/g) ?? []).length
+    const closes = (text.match(/[\])]/g) ?? []).length
+    const inside = bracketDepth > 0 || opens > 0
+    bracketDepth = Math.max(0, bracketDepth + opens - closes)
+    if (inside || !text.trim()) continue
 
-  const header = Buffer.alloc(44)
-  header.write('RIFF', 0)
-  header.writeUInt32LE(36 + data.length, 4)
-  header.write('WAVE', 8)
-  header.write('fmt ', 12)
-  header.writeUInt32LE(16, 16)
-  header.writeUInt16LE(1, 20)
-  header.writeUInt16LE(1, 22)
-  header.writeUInt32LE(16000, 24)
-  header.writeUInt32LE(32000, 28)
-  header.writeUInt16LE(2, 32)
-  header.writeUInt16LE(16, 34)
-  header.write('data', 36)
-  header.writeUInt32LE(data.length, 40)
-  return Buffer.concat([header, data])
-}
-
-function pcmStats(pcm: Float32Array): { min: number; max: number; rms: number } {
-  let min = Infinity
-  let max = -Infinity
-  let sum = 0
-  for (let i = 0; i < pcm.length; i++) {
-    const value = pcm[i] ?? 0
-    if (value < min) min = value
-    if (value > max) max = value
-    sum += value * value
-  }
-  return { min, max, rms: Math.sqrt(sum / Math.max(1, pcm.length)) }
-}
-
-export async function transcribePcm(pcm: Float32Array): Promise<string> {
-  if (pcm.length < 6400) return ''
-
-  await ensureModel()
-  const stats = pcmStats(pcm)
-  console.log(
-    `pcm: n=${pcm.length} min=${stats.min.toFixed(3)} max=${stats.max.toFixed(3)} rms=${stats.rms.toFixed(3)}`
-  )
-
-  const wavPath = join(tmpdir(), `voice-pages-${randomUUID()}.wav`)
-  await writeFile(wavPath, encodeWav16k(pcm))
-
-  const transcribe = loadTranscribe()
-  const options = {
-    model: modelPath(),
-    fname_inp: wavPath,
-    language: 'en',
-    translate: false,
-    no_timestamps: true,
-    no_prints: true,
-    temperature: 0
-  }
-
-  broadcastStatus({ state: 'transcribing' })
-  try {
-    let result: { transcription?: unknown }
-    try {
-      result = await transcribe({ ...options, use_gpu: true })
-    } catch (gpuError) {
-      console.warn('GPU transcription failed, retrying on CPU', gpuError)
-      result = await transcribe({ ...options, use_gpu: false })
+    const last = words.at(-1)
+    if (last && !/^\s/.test(text)) {
+      last.text += text
+      last.end = end
+    } else {
+      words.push({ text: ` ${text.trim()}`, start, end })
     }
-    const text = extractText(result)
-    console.log(`whisper: ${JSON.stringify(text)}`)
-    return text
+  }
+  // Whisper marks speech that runs past the end of the buffer with "..." — not dictation.
+  return words
+    .map((word) => ({ ...word, text: word.text.replace(/(?:\.\.\.|…)+/g, '') }))
+    .filter((word) => word.text.trim())
+}
+
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
+}
+
+/** Drops the stock phrases Whisper invents on silence, and echoes of its own prompt. */
+function isHallucination(words: TranscriptWord[], prompt: string): boolean {
+  const text = normalize(words.map((word) => word.text).join(''))
+  if (!text || HALLUCINATIONS.has(text)) return true
+  return text.length > 12 && normalize(prompt).includes(text)
+}
+
+const BASE_OPTIONS = {
+  language: 'en',
+  translate: false,
+  no_timestamps: false,
+  // One row per token, so the renderer gets word-level timestamps.
+  max_len: 1,
+  no_prints: true
+}
+
+let useGpu = true
+// The native addon shares one whisper context, so calls must never overlap.
+let queue: Promise<unknown> = Promise.resolve()
+
+function runSerial<T>(task: () => Promise<T>): Promise<T> {
+  const next = queue.then(task, task)
+  queue = next.catch(() => undefined)
+  return next
+}
+
+async function runWhisper(pcm: Float32Array, prompt: string): Promise<TranscriptWord[]> {
+  const transcribe = loadTranscribe()
+  const options = { ...BASE_OPTIONS, model: modelPath(), pcmf32: pcm, prompt }
+  try {
+    return wordsFromTokens(await transcribe({ ...options, use_gpu: useGpu }))
+  } catch (gpuError) {
+    if (!useGpu) throw gpuError
+    log('whisper', 'GPU transcription failed, falling back to CPU', gpuError)
+    useGpu = false
+    return wordsFromTokens(await transcribe({ ...options, use_gpu: false }))
+  }
+}
+
+let warmed: Promise<void> | null = null
+
+/** Loads the model into memory ahead of the first real utterance (~3s cold start). */
+export function warmUp(): Promise<void> {
+  warmed ??= ensureModel()
+    .then(() => runSerial(() => runWhisper(new Float32Array(16000), '')))
+    .then(() => undefined)
+    .catch((error) => {
+      warmed = null
+      throw error
+    })
+  return warmed
+}
+
+/** Transcribes 16 kHz mono PCM into words with timestamps relative to the start of `pcm`. */
+export async function transcribePcm(pcm: Float32Array, prompt = ''): Promise<TranscriptWord[]> {
+  if (pcm.length < 4800) return []
+  await ensureModel()
+  const queuedAt = Date.now()
+  let startedAt = 0
+  // whisper.cpp can't be cancelled, so a hung call blocks every later one; make that visible.
+  const watchdog = setInterval(() => {
+    log('whisper', 'transcription is taking unusually long', {
+      waitedMs: Date.now() - queuedAt,
+      runningMs: startedAt ? Date.now() - startedAt : 0,
+      audioSec: +(pcm.length / 16000).toFixed(2)
+    })
+  }, 10_000)
+
+  try {
+    const words = await runSerial(() => {
+      startedAt = Date.now()
+      return runWhisper(pcm, prompt)
+    })
+    const text = words.map((word) => word.text).join('').trim()
+    const dropped = isHallucination(words, prompt)
+    log('whisper', dropped ? 'dropped as hallucination' : 'transcribed', {
+      audioSec: +(pcm.length / 16000).toFixed(2),
+      queuedMs: startedAt - queuedAt,
+      runMs: Date.now() - startedAt,
+      gpu: useGpu,
+      promptChars: prompt.length,
+      text
+    })
+    return dropped ? [] : words
+  } catch (error) {
+    log('whisper', 'transcription failed', error)
+    throw error
   } finally {
-    await unlink(wavPath).catch(() => undefined)
-    broadcastStatus({ state: 'idle' })
+    clearInterval(watchdog)
   }
 }
