@@ -8,8 +8,10 @@ const api: VoicePagesApi = {
   savePage: (page) => ipcRenderer.invoke('pages:save', page),
   deletePage: (id) => ipcRenderer.invoke('pages:delete', id),
   copyText: (text) => clipboard.writeText(text),
-  ensureModel: () => ipcRenderer.invoke('whisper:ensureModel'),
-  transcribe: (pcm) => ipcRenderer.invoke('whisper:transcribe', pcm),
+  platform: process.platform,
+  warmUp: () => ipcRenderer.invoke('whisper:warmUp'),
+  transcribe: (pcm, prompt) => ipcRenderer.invoke('whisper:transcribe', pcm, prompt),
+  log: (scope, message, data) => ipcRenderer.send('log:write', scope, message, data),
   onStatus: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, status: WhisperStatus): void => {
       callback(status)

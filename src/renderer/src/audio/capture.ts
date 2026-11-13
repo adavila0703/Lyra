@@ -1,178 +1,146 @@
-const TARGET_RATE = 16000
-const SILENCE_RMS = 0.004
-const SPEECH_RMS = 0.003
-const SILENCE_MS = 700
-const MIN_SPEECH_SECONDS = 0.55
-const MIN_PARTIAL_SECONDS = 0.4
-const PARTIAL_EVERY_MS = 650
-const MAX_UTTERANCE_SECONDS = 12
-const IGNORE_START_MS = 200
+import { log } from '../lib/log'
+import { SAMPLE_RATE } from './vad'
 
-function downsample(input: Float32Array, inputRate: number): Float32Array {
-  if (Math.abs(inputRate - TARGET_RATE) < 1) {
-    return input.slice()
+/** 32 ms frames: small enough for a responsive VAD, large enough to keep messaging cheap. */
+const FRAME_SIZE = 512
+
+/**
+ * Runs on the audio rendering thread, so UI work on the main thread can never
+ * cause dropped samples (unlike the deprecated ScriptProcessorNode).
+ */
+const WORKLET_SOURCE = `
+class FrameCollector extends AudioWorkletProcessor {
+  constructor() {
+    super()
+    this.frame = new Float32Array(${FRAME_SIZE})
+    this.filled = 0
   }
-
-  const ratio = inputRate / TARGET_RATE
-  const length = Math.max(1, Math.floor(input.length / ratio))
-  const output = new Float32Array(length)
-
-  for (let i = 0; i < length; i++) {
-    const start = Math.floor(i * ratio)
-    const end = Math.max(start + 1, Math.floor((i + 1) * ratio))
-    let sum = 0
-    let count = 0
-    for (let j = start; j < end && j < input.length; j++) {
-      sum += input[j]
-      count += 1
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0]
+    if (!channel) return true
+    let read = 0
+    while (read < channel.length) {
+      const count = Math.min(channel.length - read, this.frame.length - this.filled)
+      this.frame.set(channel.subarray(read, read + count), this.filled)
+      this.filled += count
+      read += count
+      if (this.filled === this.frame.length) {
+        this.port.postMessage(this.frame, [this.frame.buffer])
+        this.frame = new Float32Array(${FRAME_SIZE})
+        this.filled = 0
+      }
     }
-    output[i] = count > 0 ? sum / count : 0
+    return true
   }
-
-  return output
 }
-
-function rms(samples: Float32Array): number {
-  if (samples.length === 0) return 0
-  let sum = 0
-  for (let i = 0; i < samples.length; i++) {
-    const value = samples[i]
-    sum += value * value
-  }
-  return Math.sqrt(sum / samples.length)
-}
+registerProcessor('frame-collector', FrameCollector)
+`
 
 export type CaptureHandle = {
-  stop: () => Promise<void>
+  micName: string
+  /** Audio engine and microphone track state, for diagnostics. */
+  state: () => { context: string; track: string; muted: boolean }
+  stop: () => void
 }
 
-export type CaptureHandlers = {
-  onPartial: (pcm: Float32Array) => void | Promise<void>
-  onFinal: (pcm: Float32Array) => void | Promise<void>
+export async function openMicrophone(): Promise<MediaStream> {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: true,
+      autoGainControl: true
+    },
+    video: false
+  })
+  const track = stream.getAudioTracks()[0]
+  if (!track || track.readyState !== 'live') {
+    stream.getTracks().forEach((t) => t.stop())
+    throw new Error(
+      'The microphone did not start. Check System Settings → Privacy & Security → Microphone.'
+    )
+  }
+  return stream
 }
 
-export type CaptureOptions = {
-  stream: MediaStream
-  onLevel?: (level: number) => void
-}
-
+/** Streams 16 kHz mono frames from `stream` to `onFrame` until stopped. */
 export async function startCapture(
-  handlers: CaptureHandlers,
-  options: CaptureOptions
+  stream: MediaStream,
+  onFrame: (frame: Float32Array) => void,
+  /** The microphone went away (unplugged, Bluetooth switched profile, revoked). */
+  onLost: (reason: string) => void
 ): Promise<CaptureHandle> {
-  const { stream, onLevel } = options
-  const context = new AudioContext()
+  // Letting the browser resample to 16 kHz gives proper anti-aliasing for free.
+  const context = new AudioContext({ sampleRate: SAMPLE_RATE })
+  const moduleUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'text/javascript' }))
+  try {
+    await context.audioWorklet.addModule(moduleUrl)
+  } finally {
+    URL.revokeObjectURL(moduleUrl)
+  }
   await context.resume()
 
   const source = context.createMediaStreamSource(stream)
-  const processor = context.createScriptProcessor(4096, 1, 1)
-  const silent = context.createGain()
-  silent.gain.value = 0
-
-  let chunks: Float32Array[] = []
-  let chunkSamples = 0
-  let speechSamples = 0
-  let silentMs = 0
+  const collector = new AudioWorkletNode(context, 'frame-collector')
+  // Chromium only runs nodes that are pulled by the destination, so route through a muted gain.
+  const mute = new GainNode(context, { gain: 0 })
   let stopped = false
-  let armed = false
-  let lastPartialAt = 0
-  let flushing: Promise<void> = Promise.resolve()
 
-  const armTimer = window.setTimeout(() => {
-    armed = true
-  }, IGNORE_START_MS)
-
-  const snapshot = (): Float32Array => {
-    const merged = new Float32Array(chunkSamples)
-    let offset = 0
-    for (const chunk of chunks) {
-      merged.set(chunk, offset)
-      offset += chunk.length
-    }
-    return merged
+  collector.port.onmessage = (event: MessageEvent<Float32Array>) => {
+    if (!stopped) onFrame(event.data)
   }
-
-  const reset = (): void => {
-    chunks = []
-    chunkSamples = 0
-    speechSamples = 0
-    silentMs = 0
-    lastPartialAt = 0
+  collector.onprocessorerror = () => {
+    log('capture', 'audio worklet crashed')
+    if (!stopped) onLost('The audio processor stopped unexpectedly.')
   }
+  source.connect(collector).connect(mute).connect(context.destination)
 
-  const emitFinal = (force = false): void => {
-    const minSamples = Math.floor(TARGET_RATE * MIN_SPEECH_SECONDS)
-    if (!force && (chunkSamples < minSamples || speechSamples < minSamples / 3)) {
-      reset()
-      return
-    }
-    if (chunkSamples === 0) return
-    const merged = snapshot()
-    reset()
-    if (rms(merged) < SPEECH_RMS) return
-    flushing = flushing.then(() => Promise.resolve(handlers.onFinal(merged)))
-  }
-
-  const emitPartial = (): void => {
-    if (chunkSamples < TARGET_RATE * MIN_PARTIAL_SECONDS) return
-    const merged = snapshot()
-    if (rms(merged) < SPEECH_RMS) return
-    void handlers.onPartial(merged)
-  }
-
-  processor.onaudioprocess = (event: AudioProcessingEvent) => {
-    if (stopped) return
-    const pcm = downsample(event.inputBuffer.getChannelData(0), context.sampleRate)
-    const energy = rms(pcm)
-    onLevel?.(Math.min(1, energy * 12))
-    if (!armed) return
-
-    chunks.push(pcm)
-    chunkSamples += pcm.length
-    const frameMs = (pcm.length / TARGET_RATE) * 1000
-    const now = performance.now()
-
-    if (energy >= SILENCE_RMS) {
-      speechSamples += pcm.length
-      silentMs = 0
-    } else {
-      silentMs += frameMs
-    }
-
-    if (silentMs >= SILENCE_MS && speechSamples > 0) {
-      emitFinal()
-      return
-    }
-
-    if (chunkSamples >= TARGET_RATE * MAX_UTTERANCE_SECONDS) {
-      emitFinal(true)
-      return
-    }
-
-    if (now - lastPartialAt >= PARTIAL_EVERY_MS && speechSamples > 0) {
-      lastPartialAt = now
-      emitPartial()
+  // macOS suspends audio contexts when devices change or the system interrupts audio.
+  context.onstatechange = () => {
+    log('capture', `audio context ${context.state}`)
+    if (!stopped && context.state !== 'running' && context.state !== 'closed') {
+      context.resume().then(
+        () => log('capture', `audio context resumed (${context.state})`),
+        (error) => log('capture', 'audio context resume failed', String(error))
+      )
     }
   }
 
-  source.connect(processor)
-  processor.connect(silent)
-  silent.connect(context.destination)
+  const track = stream.getAudioTracks()[0]
+  const micName = track?.label || 'Microphone'
+  if (track) {
+    track.onmute = () => log('capture', 'microphone muted by the system', { micName })
+    track.onunmute = () => log('capture', 'microphone unmuted', { micName })
+    track.onended = () => {
+      log('capture', 'microphone track ended', { micName })
+      if (!stopped) onLost(`Lost the microphone (${micName}).`)
+    }
+  }
+  log('capture', 'started', {
+    micName,
+    contextRate: context.sampleRate,
+    settings: track?.getSettings()
+  })
 
   return {
-    stop: async () => {
+    micName,
+    state: () => ({
+      context: context.state,
+      track: track?.readyState ?? 'none',
+      muted: track?.muted ?? false
+    }),
+    stop: () => {
+      if (stopped) return
       stopped = true
-      window.clearTimeout(armTimer)
-      emitFinal(true)
-      await flushing
-      processor.disconnect()
+      log('capture', 'stopped')
+      collector.port.onmessage = null
+      context.onstatechange = null
+      if (track) track.onended = track.onmute = track.onunmute = null
       source.disconnect()
-      silent.disconnect()
-      await context.close()
-      onLevel?.(0)
-      for (const mediaTrack of stream.getTracks()) {
-        mediaTrack.stop()
-      }
+      collector.disconnect()
+      mute.disconnect()
+      stream.getTracks().forEach((track) => track.stop())
+      void context.close()
     }
   }
 }
