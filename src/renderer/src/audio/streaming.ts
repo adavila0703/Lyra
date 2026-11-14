@@ -7,9 +7,10 @@ import { SAMPLE_RATE } from './vad'
  * Macháček et al., "Turning Whisper into Real-Time Transcription System" (2023).
  *
  * Whisper is re-run over a growing audio buffer every half second or so. A word
- * is committed only once two consecutive passes agree on it, and never while it
+ * is committed only once two consecutive passes agree on it, and not while it
  * is the newest word heard: Whisper's guess at the trailing word (its casing,
- * punctuation, and timing) is the least reliable. Committed text is stable;
+ * punctuation, and timing) is the least reliable. The exception is a trailing
+ * word both passes heard identically as a sentence end. Committed text is stable;
  * everything after it is shown as an unconfirmed "live" tail.
  *
  * Whisper sees whole sentences rather than pause-delimited fragments, so it
@@ -141,6 +142,10 @@ export class StreamingTranscriber {
     }
 
     const base = this.offset / SAMPLE_RATE
+    // Whisper pads input to 30 s, so on short clips it can time the last word
+    // well past the real audio. A bogus end would outlive the trim and make the
+    // timestamp fallback in `unseen` discard everything said afterwards.
+    const limit = base + end / SAMPLE_RATE
     const overdue = finalizeAt === undefined && this.length >= MAX_BUFFER
     this.passStartedAt = Date.now()
     this.passes++
@@ -148,8 +153,8 @@ export class StreamingTranscriber {
     try {
       heard = (await this.transcribe(this.audio(end), this.prompt())).map((word) => ({
         ...word,
-        start: word.start + base,
-        end: word.end + base
+        start: Math.min(word.start + base, limit),
+        end: Math.min(word.end + base, limit)
       }))
     } finally {
       this.passStartedAt = 0
@@ -159,7 +164,7 @@ export class StreamingTranscriber {
     let agreed: number
     if (finalizeAt !== undefined) agreed = words.length
     else if (overdue) agreed = Math.max(0, words.length - 1)
-    else agreed = Math.min(agreedPrefix(this.tentative, words), words.length - 1)
+    else agreed = this.agreed(words)
     agreed = Math.max(0, agreed)
 
     const committed = words.slice(0, agreed)
@@ -181,6 +186,21 @@ export class StreamingTranscriber {
       log('stream', 'nothing usable in a full buffer; discarding old audio', { bufferSec: secs(end) })
       this.trimTo(this.offset + this.length - MIN_TRIM)
     } else this.trimAtSentence()
+  }
+
+  /**
+   * How many of this pass's words both passes agree on. The newest word is held
+   * back, unless both passes heard it identically as the end of a sentence:
+   * otherwise the sentence end only commits once more speech follows, and by
+   * then Whisper has often rewritten it ("years." → "years, and"), so the
+   * buffer never trims at a sentence and grows to MAX_BUFFER.
+   */
+  private agreed(words: TranscriptWord[]): number {
+    const n = agreedPrefix(this.tentative, words)
+    if (n === 0 || n < words.length) return n
+    const last = words[n - 1]
+    const sameEnd = SENTENCE_END.test(last.text) && this.tentative[n - 1].text === last.text
+    return sameEnd ? n : n - 1
   }
 
   private commit(words: TranscriptWord[]): void {
